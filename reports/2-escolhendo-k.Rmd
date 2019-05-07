@@ -1,0 +1,101 @@
+---
+title: "K-means"
+output:
+    html_document:
+    df_print: paged
+theme: sandstone
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggbeeswarm)
+library(here)
+library(broom)
+library(cluster)
+
+theme_set(theme_bw())
+
+knitr::opts_chunk$set(tidy = FALSE,
+                      fig.width = 6,
+                      fig.height = 5)
+```
+
+```{r read}
+pb = read_csv(here::here("data/dados2010.csv"), 
+                      col_types = "ccccdddddddd") %>% 
+    filter(UF == "PB", populacao >= 2e4)
+
+m_transformado = pb %>% 
+    mutate(pop_log_scaled = as.vector(scale(log10(populacao))), 
+           long_scaled = as.vector(scale(long)), 
+           idhm_scaled = as.vector(scale(idhm))) 
+
+glimpse(m_transformado)
+```
+
+## Qual seria um bom valor de k? 
+
+Há duas medidas populares, a GAP statistic, e between/total sum of squares. A segunda é mais comum, e menos robusta. A primeira é mais robusta, mas precisa de mais dados para isso. 
+
+### GAP statistic
+
+A GAP compara a solução do agrupamento com cada k com a solução em um dataset onde não há estrutura de grupos. 
+
+A heurística sugere que escolhamos o primeiro k onde k+1 tem GAP menor que k. Se possível, menor que GAP de k menos um desvio padrão do GAP.
+
+
+```{r}
+plot_clusgap = function(clusgap, title = "Gap Statistic calculation results") {
+    require("ggplot2")
+    gstab = data.frame(clusgap$Tab, k = 1:nrow(clusgap$Tab))
+    p = ggplot(gstab, aes(k, gap)) + geom_line() + geom_point(size = 5)
+    p = p + geom_errorbar(aes(ymax = gap + SE.sim, ymin = gap - SE.sim), width = .2)
+    p = p + ggtitle(title)
+    return(p)
+}
+
+```
+
+```{r}
+gaps <- m_transformado %>% 
+    select(pop_log_scaled, idhm_scaled) %>% 
+    clusGap(FUN = kmeans, nstart = 20, K.max = 8, B = 200)
+
+plot_clusgap(gaps)
+```
+
+
+```{r}
+gaps <- m_transformado %>% 
+    select(pop_log_scaled, long_scaled, idhm_scaled) %>% 
+    clusGap(FUN = kmeans, nstart = 20, K.max = 8, B = 200)
+
+plot_clusgap(gaps)
+```
+
+### Between/totss
+
+Outra medida comumente usada no kmeans é _comparar a distância (quadrática) entre o centro dos clusters e o centro dos dados com a distância (quadrática) entre os pontos todos nos dados e o centro dos dados_. 
+
+Quebrando essa ideia para ficar mais fácil de entender: 
+
+Primeiro, o _centro dos dados_ é um ponto imaginário na média de todas as variáveis. É um ponto que está no meio dos dados. Em uma situação onde cada ponto é um grupo (e os grupos são os mais coesos possíveis), a soma das distâncias dos grupos para o centro dos dados é igual à soma da distância dos pontos para o centro dos dados. Generalizando: se houver estrutura de grupos e ela estiver capturada pelo agrupamento, o somatório da distância do centro de cada grupo para o centro geral dos dados será um valor alto.
+
+Para medir para quais valores de `k` isso acontece, calculamos a _distância do centro de cada cluster para o centro dos dados_ e multiplicamos pelo número de pontos nesse cluster. Somando esse valor para todos os clusters, temos `betweenss` abaixo. 
+
+Se esse valor for próximo do somatório total das distâncias dos pontos para o centro dos dados (`totss`), os pontos estão próximos do centro de seu cluster. Essa proporção pode ser usada para definir um bom valor de `k`. Quando ela para de crescer, para de valer à pena aumentar `k`.
+
+```{r}
+set.seed(123)
+explorando_k = tibble(k = 1:15) %>%
+    mutate(agrupamento = map(k, ~ kmeans(
+        select(m_transformado, pop_log_scaled, idhm_scaled),
+        centers = .
+    ) %>% glance())) %>%
+    unnest(agrupamento)
+
+explorando_k %>% 
+    ggplot(aes(x = k, y = betweenss / totss)) + 
+    geom_line() + 
+    geom_point()
+```

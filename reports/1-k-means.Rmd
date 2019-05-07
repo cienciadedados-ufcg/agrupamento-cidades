@@ -1,0 +1,317 @@
+---
+title: "K-means"
+output:
+    html_document:
+    df_print: paged
+theme: sandstone
+---
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(ggbeeswarm)
+library(here)
+library(broom)
+
+theme_set(theme_bw())
+
+knitr::opts_chunk$set(tidy = FALSE,
+                      fig.width = 6,
+                      fig.height = 5)
+```
+
+```{r read}
+municipios = read_csv(here::here("data/dados2010.csv"), 
+                      col_types = "ccccdddddddd") %>% 
+    filter(UF %in% c("PB", "PE", "RN", "MA", "PI", "AL", "SE", "BA"))
+
+glimpse(municipios)
+
+pb = municipios %>% 
+    filter(UF == "PB", populacao >= 2e4)
+```
+
+## Percebendo estruturas de grupos
+
+### 1d
+
+```{r}
+pb %>% 
+    ggplot(aes(x = UF, y = populacao))  + 
+    geom_quasirandom(width = .05, alpha = .3) + 
+    scale_y_log10()
+```
+
+## 2d
+
+```{r}
+pb %>% 
+    ggplot(aes(x = idhm, y = populacao, label = municipio))  + 
+    geom_point(size = 2, color = "#1D7874") + 
+    # geom_text() + 
+    scale_y_log10() + 
+    geom_rug()
+```
+
+
+```{r}
+pb %>% 
+    ggplot(aes(x = idhm, y = long))  + 
+    geom_point(size = 2, color = "#1D7874") 
+```
+
+## 3d
+
+```{r}
+pb %>% 
+    ggplot(aes(x = idhm, y = long, size = log10(populacao)))  + 
+    geom_point() 
+```
+
+
+```{r}
+library(plotly)
+p <- pb %>%
+    plot_ly(type = 'parcoords',
+            line = list(showScale = TRUE),
+            dimensions = list(
+                list(range = c(0.5, 0.8),
+                     label = 'IDHM', values = ~idhm),
+                list(range = c(-34, -40),
+                     label = 'Longitude', values = ~long),
+                list(range = c(4, 6),
+                     label = 'log População', values = ~log10(populacao))
+            )
+    )
+p
+```
+
+
+## Encontrando agrupamentos
+
+Uma forma de descrever estrutura nos dados é percebendo grupos de observações mais semelhantes entre si que com o restante dos dados.
+
+O tipo de pergunta que queremos responder com agrupamento é _existem grupos de cidade claramente diferentes em termos de IDHM, distância do litoral e população?_
+
+### Sempre há grupos?
+
+Não. Para ilustrar, podemos gerar dados sintéticos que tem e que não tem tendência de grupos: 
+
+```{r}
+set.seed(123) # com a mesma semente, o gerador de números aleatórios gera a mesma sequência
+
+t1 = tibble(
+    formato = "Sem estrutura de grupos", 
+    variavel = runif(140, min = -5, max = 100)
+) 
+
+t2 = tibble(
+    formato = "Com estrutura de grupos",
+    variavel = c(rnorm(100, mean = 10, sd = 8), 
+                 rnorm(40, mean = 80, sd = 15))
+)
+
+t3 = tibble(
+    formato = "Grupos e outliers",
+    variavel = c(rnorm(100, mean = 10, sd = 10), 75, 120)
+)
+
+bind_rows(t1, t2, t3) %>% 
+    ggplot(aes(x = formato, y = variavel)) + 
+    geom_jitter(width = .05, height = 0, size = 2, alpha = .6, color = "#F04155") 
+
+```
+
+
+## Elementos para o agrupamento 
+
+Para produzir uma solução de agrupamento precisamos de: 
+
+* Definição de proximidade/distância entre pontos
+* Definição de proximidade/distância entre grupos ou grupos e pontos
+* Processo de agrupamento 
+* Decidir quantos grupos existem
+
+Depois vem o principal: **avaliar e interpretar** a solução. _Agrupamento sempre dá um resultado, mas nem sempre o resultado é útil_. 
+
+Há duas maneiras principais de agrupar: aglomerativa ou baseada em partição. Vamos explorar aqui a baseada em partição.
+
+## K-means
+
+### Com uma dimensão
+
+```{r}
+m_transformado = pb %>% 
+    mutate(pop_log = log10(populacao))
+summary(m_transformado %>% select(populacao, pop_log))
+```
+
+```{r}
+n_clusters = 3
+
+# O agrupamento de fato:
+km = m_transformado %>% 
+    select(pop_log) %>% 
+    kmeans(centers = n_clusters, nstart = 20)
+
+agrupado = km %>% 
+    augment(m_transformado)
+
+agrupado %>% 
+    ggplot(aes(x = UF, y = populacao, color = .cluster))  + 
+    geom_quasirandom(width = .05) + 
+    scale_y_log10()
+
+```
+
+
+```{r}
+agrupa_pop <- function(df, k){
+    select(df, pop_log) %>% 
+        kmeans(centers = k, 
+               nstart = 20) %>% 
+        augment(df) %>% 
+        mutate(.cluster = as.character(.cluster))
+}
+
+agrupamentos = tibble(k = 1:6) %>% 
+    mutate(agrupamento = map(k, ~ agrupa_pop(m_transformado, .))) %>% 
+    unnest(agrupamento)
+ 
+agrupamentos %>%
+    ggplot(aes(
+        x = UF,
+        y = populacao,
+        label = municipio,
+        colour = .cluster
+    )) +
+    geom_quasirandom(width = .3) +
+    facet_wrap( ~ k) +
+    scale_y_log10()
+```
+
+### Com duas
+
+```{r}
+n_clusters = 4
+
+# O agrupamento de fato:
+km = m_transformado %>% 
+    select(pop_log, idhm) %>% 
+    kmeans(centers = n_clusters, nstart = 20)
+
+agrupado = km %>% 
+    augment(m_transformado)
+
+agrupado %>% 
+    ggplot(aes(x = idhm, y = populacao, color = .cluster))  + 
+    geom_point(size = 2) + 
+    scale_y_log10()
+
+```
+
+Opa. O agrupamento está considerando apenas população. Isso acontece porque a escala dessa variável tem distâncias muito maiores em termos absolutos que a idhm. Para resolver, precisamos colocá-las em uma mesma unidade: desvios padrão.
+
+```{r}
+m_transformado = pb %>% 
+    mutate(pop_log_scaled = as.vector(scale(log10(populacao))), 
+           idhm_scaled = as.vector(scale(idhm))) 
+    
+m_transformado %>% 
+    select(pop_log_scaled, idhm_scaled) %>% 
+    summary()
+```
+
+
+```{r}
+km = m_transformado %>%
+    select(pop_log_scaled, idhm_scaled) %>%
+    kmeans(centers = n_clusters, nstart = 20)
+
+agrupado = km %>% 
+    augment(m_transformado)
+
+agrupado %>%
+    ggplot(aes(x = idhm_scaled, y = pop_log_scaled, color = .cluster))  +
+    geom_point(size = 2) 
+
+agrupado %>%
+    ggplot(aes(x = idhm, y = populacao, color = .cluster, label = municipio))  +
+    geom_point(size = 2) +
+    scale_y_log10()
+```
+
+```{r}
+p = agrupado %>%
+    ggplot(aes(x = idhm, y = populacao, color = .cluster, label = municipio))  +
+    geom_point(size = 2) +
+    scale_y_log10()
+
+ggplotly(p)
+```
+
+
+
+```{r}
+agrupa_pop_idhm <- function(df, k){
+    df %>% 
+        select(pop_log_scaled, idhm_scaled) %>%
+        kmeans(centers = k, 
+               nstart = 20) %>% 
+        augment(df) %>% 
+        mutate(.cluster = as.character(.cluster))
+}
+
+agrupamentos = tibble(k = 1:6) %>% 
+    mutate(agrupamento = map(k, ~ agrupa_pop_idhm(m_transformado, .))) %>% 
+    unnest(agrupamento)
+ 
+agrupamentos %>%
+    ggplot(aes(
+        x = idhm,
+        y = populacao,
+        label = municipio,
+        colour = .cluster
+    )) +
+    geom_point(size = 2, alpha = .8) +
+    facet_wrap( ~ k) +
+    scale_y_log10()
+```
+
+### 3 dimensões
+
+```{r}
+m_transformado = pb %>% 
+    mutate(pop_log_scaled = as.vector(scale(log10(populacao))), 
+           long_scaled = as.vector(scale(long)), 
+           idhm_scaled = as.vector(scale(idhm))) 
+
+km = m_transformado %>%
+    select(pop_log_scaled, idhm_scaled, long_scaled) %>%
+    kmeans(centers = 3, nstart = 20)
+
+agrupado = km %>% 
+    augment(m_transformado)
+```
+
+
+```{r}
+p <- agrupado %>%
+    plot_ly(type = 'parcoords',
+            line = list(showScale = TRUE, 
+                        color = ~ .cluster),
+            dimensions = list(
+                list(range = c(0.5, 0.8),
+                     label = 'IDHM', values = ~idhm),
+                list(range = c(-34, -40),
+                     label = 'Longitude', values = ~long),
+                list(range = c(4, 6),
+                     label = 'log População', values = ~log10(populacao))
+            )
+    )
+p
+```
+
+```{r}
+
+```
+
