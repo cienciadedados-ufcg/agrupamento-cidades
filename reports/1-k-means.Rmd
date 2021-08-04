@@ -296,8 +296,9 @@ agrupado = km %>%
 
 ```{r}
 p <- agrupado %>%
+    mutate(.cluster = as.character(.cluster)) %>% 
     plot_ly(type = 'parcoords',
-            line = list(showScale = TRUE, 
+            line = list(showScale = TRUE,
                         color = ~ .cluster),
             dimensions = list(
                 list(range = c(0.5, 0.8),
